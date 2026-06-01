@@ -51,7 +51,7 @@ func NewClient() *Client {
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		model: "tts-1",
+		model: "gpt-4o-mini-tts",
 	}
 }
 
