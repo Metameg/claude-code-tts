@@ -255,6 +255,110 @@ func TestHandleSpeak_UnknownProvider_ErrorListsBothSupportedProviders(t *testing
 	}
 }
 
+// TestHandleSpeak_EmptyProviderString_BehavesAsDefault verifies that passing
+// an explicit empty string for the "provider" argument is treated identically
+// to omitting the parameter — both should use the default provider.
+func TestHandleSpeak_EmptyProviderString_BehavesAsDefault(t *testing.T) {
+	registry := buildRegistryWithFakeOpenAI()
+	srv, err := NewWithRegistry(registry)
+	if err != nil {
+		t.Fatalf("NewWithRegistry returned error: %v", err)
+	}
+	defer srv.Shutdown()
+
+	request := mcp.CallToolRequest{}
+	request.Params.Arguments = map[string]interface{}{
+		"text":     "Empty provider string test",
+		"provider": "", // explicit empty — should fall back to default
+	}
+
+	result, err := srv.handleSpeak(context.Background(), request)
+	if err != nil {
+		t.Fatalf("handleSpeak returned unexpected error: %v", err)
+	}
+	if result.IsError {
+		content := result.Content[0].(mcp.TextContent)
+		t.Errorf("expected success with empty provider string, got error: %s", content.Text)
+	}
+}
+
+// TestHandleSpeak_ProviderNameIsCaseSensitive documents and locks the current
+// behaviour: provider names are matched case-sensitively.  "OpenAI" (mixed
+// case) is NOT the same as "openai" (lower case) and must return an error
+// rather than silently resolving to the registered "openai" provider.
+func TestHandleSpeak_ProviderNameIsCaseSensitive(t *testing.T) {
+	registry := buildRegistryWithFakeOpenAI() // registers "openai"
+	srv, err := NewWithRegistry(registry)
+	if err != nil {
+		t.Fatalf("NewWithRegistry returned error: %v", err)
+	}
+	defer srv.Shutdown()
+
+	mixedCaseNames := []string{"OpenAI", "OPENAI", "Openai", "openAI"}
+	for _, name := range mixedCaseNames {
+		t.Run(name, func(t *testing.T) {
+			request := mcp.CallToolRequest{}
+			request.Params.Arguments = map[string]interface{}{
+				"text":     "Hello",
+				"provider": name,
+			}
+
+			result, err := srv.handleSpeak(context.Background(), request)
+			if err != nil {
+				t.Fatalf("handleSpeak returned unexpected error: %v", err)
+			}
+			if !result.IsError {
+				t.Errorf("expected error for case-variant provider name %q, got success (registry lookup should be case-sensitive)", name)
+			}
+		})
+	}
+}
+
+// TestHandleSpeak_UnknownProvider_ErrorListsProvidersSorted verifies that when
+// more than one provider is registered and an unknown provider is requested,
+// the error message lists the supported providers in sorted order, so the
+// output is deterministic regardless of registration order.
+func TestHandleSpeak_UnknownProvider_ErrorListsProvidersSorted(t *testing.T) {
+	registry := tts.NewRegistry()
+	// Register in reverse alphabetical order to confirm sorting.
+	registry.Register(&fakeServerProvider{name: "zzz-provider"})
+	registry.Register(&fakeServerProvider{name: "aaa-provider"})
+	registry.Register(&fakeServerProvider{name: "mmm-provider"})
+
+	srv, err := NewWithRegistry(registry)
+	if err != nil {
+		t.Fatalf("NewWithRegistry returned error: %v", err)
+	}
+	defer srv.Shutdown()
+
+	request := mcp.CallToolRequest{}
+	request.Params.Arguments = map[string]interface{}{
+		"text":     "Hello",
+		"provider": "unknown",
+	}
+
+	result, err := srv.handleSpeak(context.Background(), request)
+	if err != nil {
+		t.Fatalf("handleSpeak returned unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Error("expected error for unknown provider")
+	}
+
+	content := result.Content[0].(mcp.TextContent)
+	aaaIdx := strings.Index(content.Text, "aaa-provider")
+	mmmIdx := strings.Index(content.Text, "mmm-provider")
+	zzzIdx := strings.Index(content.Text, "zzz-provider")
+
+	if aaaIdx == -1 || mmmIdx == -1 || zzzIdx == -1 {
+		t.Errorf("error message %q should list all three providers", content.Text)
+	}
+	if !(aaaIdx < mmmIdx && mmmIdx < zzzIdx) {
+		t.Errorf("providers not in sorted order in error message: aaa@%d mmm@%d zzz@%d in %q",
+			aaaIdx, mmmIdx, zzzIdx, content.Text)
+	}
+}
+
 // --- fake provider used only in this test file ---
 
 // fakeServerProvider is a minimal tts.Provider stub for server-level tests.
