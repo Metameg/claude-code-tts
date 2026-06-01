@@ -22,8 +22,12 @@ type Server struct {
 func New() (*Server, error) {
 	logging.Info("Creating TTS MCP server...")
 
+	// Build provider registry with the built-in OpenAI backend.
+	reg := tts.NewRegistry()
+	reg.Register(tts.NewClient()) // registers "openai"
+
 	// Create worker pool (2 workers, queue size 50)
-	wp := NewWorkerPool(2, 50)
+	wp := NewWorkerPoolWithRegistry(2, 50, reg)
 	wp.Start()
 	logging.Info("Worker pool created and started")
 
@@ -38,6 +42,7 @@ func New() (*Server, error) {
 	s := &Server{
 		mcpServer:  mcpSrv,
 		workerPool: wp,
+		registry:   reg,
 	}
 
 	// Register tools

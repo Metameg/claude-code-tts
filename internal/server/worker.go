@@ -120,15 +120,32 @@ func (wp *WorkerPool) worker(id int) {
 // processJob handles a single TTS job
 func (wp *WorkerPool) processJob(job *Job) {
 	startTime := time.Now()
-	logging.Info("Job %s: starting (voice=%s, text_len=%d)", job.ID, job.Voice, len(job.Text))
+	logging.Info("Job %s: starting (provider=%s, voice=%s, text_len=%d)", job.ID, job.ProviderName, job.Voice, len(job.Text))
 
 	job.mu.Lock()
 	job.Status = "processing"
 	job.mu.Unlock()
 
-	// Synthesize audio
-	logging.Debug("Job %s: calling OpenAI TTS API...", job.ID)
-	audioData, err := wp.ttsClient.Synthesize(job.Text, job.Voice)
+	// Resolve the synthesizer: prefer registry-based provider, fall back to ttsClient.
+	var audioData []byte
+	var err error
+	if wp.registry != nil {
+		provider, pErr := wp.registry.Get(job.ProviderName)
+		if pErr != nil {
+			job.mu.Lock()
+			job.Status = "failed"
+			job.Error = pErr.Error()
+			job.mu.Unlock()
+			wp.failed.Add(1)
+			logging.Error("Job %s: unknown provider: %v", job.ID, pErr)
+			return
+		}
+		logging.Debug("Job %s: calling %s TTS API...", job.ID, job.ProviderName)
+		audioData, err = provider.Synthesize(job.Text, job.Voice)
+	} else {
+		logging.Debug("Job %s: calling OpenAI TTS API...", job.ID)
+		audioData, err = wp.ttsClient.Synthesize(job.Text, job.Voice)
+	}
 	if err != nil {
 		job.mu.Lock()
 		job.Status = "failed"
