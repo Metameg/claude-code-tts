@@ -16,10 +16,9 @@ import (
 
 // --- Interface conformance ---
 
-// Compile-time assertions: both the real Client and the fakeProvider used here
-// must implement Provider.  If Provider gains a new method these lines fail to
-// compile, giving immediate feedback.
-var _ Provider = (*Client)(nil)
+// Compile-time assertion: fakeProvider used in this file must implement Provider.
+// If Provider gains a new method this line fails to compile, giving immediate feedback.
+// Note: the *Client assertion lives in provider_test.go to avoid duplication.
 var _ Provider = (*fakeProvider)(nil)
 
 // --- Registry edge cases ---

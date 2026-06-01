@@ -25,6 +25,9 @@ type Job struct {
 
 // WorkerPool manages TTS job processing
 type WorkerPool struct {
+	// ttsClient is a legacy/test-only field retained for existing provider-agnostic
+	// tests (worker_test.go).  Production code uses NewWorkerPoolWithRegistry and
+	// the registry field instead.
 	ttsClient   *tts.Client
 	registry    *tts.Registry
 	audioPlayer *audio.Player
@@ -41,6 +44,8 @@ type WorkerPool struct {
 }
 
 // NewWorkerPool creates a new worker pool backed by the default OpenAI client.
+// This is a legacy/test-only constructor retained for existing provider-agnostic
+// tests in worker_test.go.  New production code should use NewWorkerPoolWithRegistry.
 func NewWorkerPool(workerCount, queueSize int) *WorkerPool {
 	return &WorkerPool{
 		ttsClient:   tts.NewClient(),
@@ -140,7 +145,7 @@ func (wp *WorkerPool) processJob(job *Job) {
 			logging.Error("Job %s: unknown provider: %v", job.ID, pErr)
 			return
 		}
-		logging.Debug("Job %s: calling %s TTS API...", job.ID, job.ProviderName)
+		logging.Debug("Job %s: calling %.64s TTS API...", job.ID, job.ProviderName)
 		audioData, err = provider.Synthesize(job.Text, job.Voice)
 	} else {
 		logging.Debug("Job %s: calling OpenAI TTS API...", job.ID)
