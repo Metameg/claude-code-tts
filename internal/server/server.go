@@ -15,6 +15,7 @@ import (
 type Server struct {
 	mcpServer  *server.MCPServer
 	workerPool *WorkerPool
+	registry   *tts.Registry
 }
 
 // New creates a new TTS MCP server
@@ -46,6 +47,32 @@ func New() (*Server, error) {
 	return s, nil
 }
 
+// NewWithRegistry creates a TTS MCP server whose speak handler resolves providers
+// from the supplied Registry.  It does NOT start workers automatically, making it
+// safe to use in unit tests without real audio or network I/O.
+//
+// Test seam: introduced for issue-2 provider-abstraction tests.
+// Signature: NewWithRegistry(registry *tts.Registry) (*Server, error)
+func NewWithRegistry(registry *tts.Registry) (*Server, error) {
+	wp := NewWorkerPoolWithRegistry(2, 50, registry)
+	wp.Start()
+
+	mcpSrv := server.NewMCPServer(
+		"claude-code-tts",
+		"1.0.0",
+		server.WithToolCapabilities(true),
+	)
+
+	s := &Server{
+		mcpServer:  mcpSrv,
+		workerPool: wp,
+		registry:   registry,
+	}
+
+	s.registerTools()
+	return s, nil
+}
+
 // registerTools adds the TTS tools to the MCP server
 func (s *Server) registerTools() {
 	// speak tool - converts text to speech
@@ -57,6 +84,9 @@ func (s *Server) registerTools() {
 		),
 		mcp.WithString("voice",
 			mcp.Description("Voice to use: alloy, echo, fable, onyx, nova, shimmer (default: alloy)"),
+		),
+		mcp.WithString("provider",
+			mcp.Description("TTS provider to use (default: openai)"),
 		),
 	)
 
@@ -108,22 +138,53 @@ func (s *Server) handleSpeak(ctx context.Context, request mcp.CallToolRequest) (
 		return mcp.NewToolResultError("text exceeds maximum length of 4096 characters"), nil
 	}
 
-	// Extract voice parameter (default to alloy)
-	voice := "alloy"
+	// Resolve provider: use registry when available, otherwise fall back to legacy path.
+	providerName := tts.DefaultProviderName
+	if p, ok := request.Params.Arguments["provider"].(string); ok && p != "" {
+		providerName = p
+	}
+
+	var voiceValidator func(string) bool
+	var defaultVoiceStr string
+
+	if s.registry != nil {
+		provider, err := s.registry.Get(providerName)
+		if err != nil {
+			logging.Warn("speak: unknown provider '%s'", providerName)
+			supportedNames := s.registry.Names()
+			return mcp.NewToolResultError(
+				fmt.Sprintf("unsupported provider '%s'. Supported providers: %v", providerName, supportedNames),
+			), nil
+		}
+		voiceValidator = provider.IsValidVoice
+		defaultVoiceStr = string(provider.DefaultVoice())
+	} else {
+		voiceValidator = tts.IsValidVoice
+		defaultVoiceStr = "alloy"
+	}
+
+	// Extract voice parameter (default to provider default)
+	voice := defaultVoiceStr
 	if v, ok := request.Params.Arguments["voice"].(string); ok && v != "" {
 		voice = v
 	}
 
 	// Validate voice
-	if !tts.IsValidVoice(voice) {
+	if !voiceValidator(voice) {
 		logging.Warn("speak: invalid voice '%s'", voice)
 		return mcp.NewToolResultError(fmt.Sprintf("invalid voice '%s'. Valid voices: alloy, echo, fable, onyx, nova, shimmer", voice)), nil
 	}
 
-	logging.Info("speak: queueing job (voice=%s, text_len=%d, preview='%.50s...')", voice, len(text), text)
+	logging.Info("speak: queueing job (provider=%s, voice=%s, text_len=%d, preview='%.50s...')", providerName, voice, len(text), text)
 
 	// Submit job to worker pool
-	job, err := s.workerPool.Submit(text, tts.Voice(voice))
+	var job *Job
+	var err error
+	if s.registry != nil {
+		job, err = s.workerPool.SubmitWithProvider(text, tts.Voice(voice), providerName)
+	} else {
+		job, err = s.workerPool.Submit(text, tts.Voice(voice))
+	}
 	if err != nil {
 		logging.Error("speak: failed to queue job: %v", err)
 		return mcp.NewToolResultError(fmt.Sprintf("failed to queue TTS job: %v", err)), nil
