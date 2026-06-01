@@ -103,15 +103,13 @@ func (c *Client) Synthesize(text string, voice Voice) ([]byte, error) {
 }
 
 // Name returns the registry key for the OpenAI provider.
-// stub – returns empty string until the real implementation is added.
 func (c *Client) Name() string {
-	return ""
+	return DefaultProviderName
 }
 
 // DefaultVoice returns the default voice for the OpenAI provider.
-// stub – returns empty Voice until the real implementation is added.
 func (c *Client) DefaultVoice() Voice {
-	return ""
+	return VoiceAlloy
 }
 
 // IsValidVoice reports whether the given voice string is valid for the OpenAI provider.
